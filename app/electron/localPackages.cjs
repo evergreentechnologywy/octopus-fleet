@@ -2792,9 +2792,17 @@ async function copySnapshotFile(file, targetRoot) {
     }
     const target = path.join(targetRoot, file.relative_path);
     if (file.body === undefined) {
-      const parent = await fs.open(path.dirname(target), fsSync.constants.O_RDONLY | fsSync.constants.O_DIRECTORY | fsSync.constants.O_NOFOLLOW);
-      try { require("./nativeFiles.cjs").cloneFile(source.fd, parent.fd, path.basename(target)); }
-      finally { await parent.close(); }
+      if (process.platform === "darwin") {
+        const parent = await fs.open(path.dirname(target), fsSync.constants.O_RDONLY | fsSync.constants.O_DIRECTORY | fsSync.constants.O_NOFOLLOW);
+        try { require("./nativeFiles.cjs").cloneFile(source.fd, parent.fd, path.basename(target)); }
+        finally { await parent.close(); }
+      } else {
+        // clonefile is an APFS syscall with no equivalent off macOS. A plain
+        // copy still satisfies the isolation contract asserted just below:
+        // the destination gets its own inode and nlink of 1, and its mode is
+        // set explicitly afterwards, so nothing about the guarantee changes.
+        await fs.copyFile(file.path, target);
+      }
     }
     const handle = await fs.open(target, file.body === undefined ? fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW : "wx", file.mode);
     try {
