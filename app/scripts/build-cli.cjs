@@ -7,7 +7,7 @@ async function buildCli({ runtime = false } = {}) {
   const appRoot = path.resolve(__dirname, "..");
   const outdir = path.join(appRoot, "build", "cli");
   await fs.mkdir(outdir, { recursive: true });
-  if (process.platform === "darwin" && !runtime) require("../native/build.cjs").buildClientFilesystem();
+  require("../native/build.cjs").buildClientFilesystem();
   await build({
     entryPoints: [path.join(appRoot, "cli", "shared.ts")],
     outfile: path.join(outdir, "shared.cjs"),
@@ -20,7 +20,6 @@ async function buildCli({ runtime = false } = {}) {
     logLevel: "warning",
   });
   if (runtime) {
-    if (process.platform !== "darwin") throw new Error("The current Octopus CLI distribution is built for macOS.");
     const repoRoot = path.dirname(appRoot);
     const registry = path.join(repoRoot, "registry");
     const packager = require("./runtime-package.cjs").createRuntimePackager({ repoRoot, appRoot, outputRoot: path.join(outdir, "runtime") });
@@ -28,8 +27,14 @@ async function buildCli({ runtime = false } = {}) {
     const bridge = path.join(provider, "opencodex-bridge");
     run("npm", ["ci"], bridge);
     run("npm", ["run", "build"], bridge);
+    // The desktop GUI substrate is a Swift/AppKit helper. It backs the
+    // desktop_session worker environment only; a headless Linux or Windows
+    // runtime has no such driver, so its absence is not a build failure. The
+    // driver reports itself unavailable at run time instead.
     const desktop = path.join(registry, "worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native");
-    require(path.join(desktop, "build.cjs")).buildDesktopNative(path.join(desktop, "bin/octopus-desktop-native"));
+    if (process.platform === "darwin") {
+      require(path.join(desktop, "build.cjs")).buildDesktopNative(path.join(desktop, "bin/octopus-desktop-native"));
+    }
     const bins = [...new Set([...packager.collectBundledBinaries(registry), "octopus-provider-opencodex-life", "octopus-input-intake-life"])];
     run("cargo", ["build", "--locked", "--release", ...bins.flatMap((bin) => ["--bin", bin])], repoRoot);
     packager.materializeProviderLife(provider, "octopus-provider-opencodex-life");

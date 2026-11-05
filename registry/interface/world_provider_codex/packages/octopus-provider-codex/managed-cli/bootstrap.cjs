@@ -51,6 +51,17 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+// The upstream Codex release names each artifact after its Rust target triple,
+// which does not match Node's platform-arch key. This table is the only place
+// that mapping lives, so a new platform needs one entry here and one block in
+// release.json and nothing else.
+const CODEX_ARCHIVE_ENTRY = {
+  "darwin-arm64": "codex-aarch64-apple-darwin",
+  "darwin-x64": "codex-x86_64-apple-darwin",
+  "linux-x64": "codex-x86_64-unknown-linux-musl",
+  "win32-x64": "codex-x86_64-pc-windows-msvc.exe",
+};
+
 function notificationMethods(value) {
   return Array.isArray(value) && value.every(method => typeof method === "string" && NOTIFICATION_METHOD.test(method))
     && new Set(value).size === value.length;
@@ -80,7 +91,7 @@ function releaseManifest(file = path.join(__dirname, "release.json")) {
     }
   }
   for (const [platform, asset] of Object.entries(manifest.platforms)) {
-    const entry = { "darwin-arm64": "codex-aarch64-apple-darwin", "darwin-x64": "codex-x86_64-apple-darwin" }[platform];
+    const entry = CODEX_ARCHIVE_ENTRY[platform];
     if (!entry || !fields(asset, ["archive_entry", "archive_bytes", "archive_sha256", "url", "companions"]) || asset.archive_entry !== entry
         || asset.url !== `https://github.com/openai/codex/releases/download/${manifest.tag}/${asset.archive_entry}.tar.gz`
         || !SHA256.test(asset.archive_sha256) || !Number.isSafeInteger(asset.archive_bytes)
@@ -381,7 +392,11 @@ function copyInstallation(source, destination) {
   const receipt = verifyInstallation(source);
   fs.mkdirSync(destination, { recursive: true });
   for (const { executable } of executableReceipts(receipt)) {
-    fs.copyFileSync(path.join(source, executable), path.join(destination, executable), fs.constants.COPYFILE_FICLONE);
+    // COPYFILE_FICLONE is the macOS copy-on-write fast path; it fails with
+    // ENOTSUP on most Linux filesystems and does not exist on Windows, so the
+    // flag is only requested where it is meaningful.
+    const flags = process.platform === "darwin" ? fs.constants.COPYFILE_FICLONE : 0;
+    fs.copyFileSync(path.join(source, executable), path.join(destination, executable), flags);
     fs.chmodSync(path.join(destination, executable), 0o755);
   }
   fs.copyFileSync(path.join(source, RECEIPT), path.join(destination, RECEIPT));
@@ -397,9 +412,14 @@ function sealSigning(inputs) {
   for (const { root, receipt } of inputs) {
     const seal = evidence => {
       const binary = path.join(root, evidence.executable);
-      execute("codesign", ["--verify", "--strict", binary]);
-      return { ...evidence, executable_sha256: digest(binary), executable_bytes: fs.statSync(binary).size,
-        signing: { kind: "ad-hoc", before_sha256: evidence.executable_sha256 } };
+      // Ad-hoc codesign exists only on macOS. The receipt vocabulary is
+      // exactly two-valued - null for "not signed" and {kind:"ad-hoc"} for
+      // "signed" - so off macOS the seal keeps null and records only the
+      // post-build digest that verifyInstallation checks.
+      const signing = process.platform === "darwin"
+        ? (execute("codesign", ["--verify", "--strict", binary]), { kind: "ad-hoc", before_sha256: evidence.executable_sha256 })
+        : null;
+      return { ...evidence, executable_sha256: digest(binary), executable_bytes: fs.statSync(binary).size, signing };
     };
     atomicJson(path.join(root, RECEIPT), { ...seal(receipt), companions: { [COMPANION]: seal(receipt.companions[COMPANION]) } });
     verifyInstallation(root);

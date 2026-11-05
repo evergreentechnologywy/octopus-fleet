@@ -1,3 +1,9 @@
+// -std=c11 puts glibc in strict mode, which hides the POSIX declarations this
+// file needs on Linux (NAME_MAX, fstatat, AT_SYMLINK_NOFOLLOW). Darwin declares
+// all of them unconditionally, so the macro is only set there.
+#if !defined(__APPLE__) && !defined(_WIN32)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <node_api.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -5,9 +11,19 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/clonefile.h>
 #include <sys/stat.h>
+// The two operations this addon exports are Darwin syscalls: fclonefileat for
+// an APFS copy-on-write clone and renameatx_np with RENAME_EXCL for a
+// no-replace directory move. Neither exists on Linux or Windows, and the only
+// consumer (app/electron/nativeFiles.cjs) already refuses to call them there.
+// The module is still compiled and loaded on every platform because packaging
+// stages it into the runtime, so the non-Darwin build exports the same surface
+// and answers with ENOTSUP rather than failing to link.
+#if defined(__APPLE__)
+#include <sys/clonefile.h>
 #include <sys/stdio.h>
+#define OCTOPUS_HAS_NATIVE_PACKAGE_OPS 1
+#endif
 
 static napi_value fail(napi_env env, int error, const char *operation, const char *error_code) {
     char message[256];
@@ -20,6 +36,18 @@ static napi_value fail(napi_env env, int error, const char *operation, const cha
         || napi_set_named_property(env, value, "errno", number) != napi_ok) return NULL;
     napi_throw(env, value);
     return NULL;
+}
+
+static napi_value unsupported(napi_env env, const char *operation, const char *error_code) {
+    // EOPNOTSUPP is the POSIX spelling; glibc only exposes ENOTSUP under
+    // _GNU_SOURCE, which strict -std=c11 does not enable.
+    return fail(env, EOPNOTSUPP, operation, error_code);
+}
+
+static napi_value done(napi_env env) {
+    napi_value result;
+    if (napi_get_undefined(env, &result) != napi_ok) return NULL;
+    return result;
 }
 
 static int descriptor(napi_env env, napi_value value, int *result) {
@@ -52,10 +80,13 @@ static napi_value clone_file(napi_env env, napi_callback_info info) {
     struct stat source_stat, directory_stat;
     if (fstat(source, &source_stat) != 0 || fstat(directory, &directory_stat) != 0) return fail(env, errno, "clonefile", "ERR_PACKAGE_CLONE");
     if (!S_ISREG(source_stat.st_mode) || !S_ISDIR(directory_stat.st_mode)) return fail(env, EINVAL, "clonefile", "ERR_PACKAGE_CLONE");
+#if defined(OCTOPUS_HAS_NATIVE_PACKAGE_OPS)
     if (fclonefileat(source, directory, name, CLONE_NOOWNERCOPY) != 0) return fail(env, errno, "clonefile", "ERR_PACKAGE_CLONE");
-    napi_value result;
-    if (napi_get_undefined(env, &result) != napi_ok) return NULL;
-    return result;
+#else
+    (void)name;
+    return unsupported(env, "clonefile", "ERR_PACKAGE_CLONE");
+#endif
+    return done(env);
 }
 
 static napi_value rename_directory_exclusive(napi_env env, napi_callback_info info) {
@@ -81,12 +112,15 @@ static napi_value rename_directory_exclusive(napi_env env, napi_callback_info in
     if (!S_ISDIR(source_stat.st_mode)) {
         return fail(env, EINVAL, "exclusive directory rename", "ERR_PACKAGE_RENAME");
     }
+#if defined(OCTOPUS_HAS_NATIVE_PACKAGE_OPS)
     if (renameatx_np(source, source_name, destination, destination_name, RENAME_EXCL) != 0) {
         return fail(env, errno, "exclusive directory rename", "ERR_PACKAGE_RENAME");
     }
-    napi_value result;
-    if (napi_get_undefined(env, &result) != napi_ok) return NULL;
-    return result;
+#else
+    (void)destination_name;
+    return unsupported(env, "exclusive directory rename", "ERR_PACKAGE_RENAME");
+#endif
+    return done(env);
 }
 
 NAPI_MODULE_INIT() {

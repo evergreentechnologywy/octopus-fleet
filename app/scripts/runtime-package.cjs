@@ -3,6 +3,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { copyTree, copyFile } = require("./copy-macos.cjs");
+const platform = require("./platform-tools.cjs");
 const { readGeneratedSourcePaths, assertDeclaredGeneratedOutput } = require("./generated-source-boundary.cjs");
 
 function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
@@ -400,7 +401,8 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
   }
 
   function stripExecutables(executables) {
-    transformExecutableCopies(executables, file => run("strip", ["-x", file], appRoot));
+    if (!platform.isDarwin() && !platform.isLinux()) return;
+    transformExecutableCopies(executables, file => platform.stripExecutable(file));
   }
 
   function transformExecutableCopies(executables, transform) {
@@ -500,11 +502,11 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
 
   function sealProviderSigningInputs(records, { relativeRoot = bundledAppRoot, receiptPath = path.join(bundledAppRoot, "provider-signing.json") } = {}) {
     const transformations = records.map(({ receiptPath, executable, before }) => {
-      run("codesign", ["--verify", "--strict", executable], appRoot);
+      const signing = platform.verifySignature(executable);
       const bytes = fs.readFileSync(executable);
       const after = { ...before, executable_sha256: crypto.createHash("sha256").update(bytes).digest("hex"), executable_bytes: bytes.length };
       fs.writeFileSync(receiptPath, `${JSON.stringify(after, null, 2)}\n`, { mode: 0o644 });
-      return { receipt: path.relative(relativeRoot, receiptPath), signing: "ad-hoc", before, after };
+      return { receipt: path.relative(relativeRoot, receiptPath), signing, before, after };
     });
     fs.writeFileSync(receiptPath, `${JSON.stringify({ schema_version: 1, transformations }, null, 2)}\n`);
   }
@@ -527,7 +529,7 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
         executables.push(file);
       }
     }
-    transformExecutableCopies(executables, file => run("codesign", ["--force", "--sign", "-", file], appRoot));
+    if (platform.isDarwin()) transformExecutableCopies(executables, file => platform.signAdHoc(file));
   }
 
   function run(command, args, cwd) {

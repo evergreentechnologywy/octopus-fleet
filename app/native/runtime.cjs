@@ -13,7 +13,7 @@ function clientRuntime() {
   const pin = JSON.parse(fs.readFileSync(path.join(__dirname, "runtime.json"), "utf8"));
   const archives = pin?.electron_archive_sha256;
   if (pin?.schema_version !== 1 || !exactVersion.test(pin.electron) || !exactVersion.test(pin.node) || !digest.test(pin.node_headers_sha256 ?? "")
-    || !archives || Object.keys(archives).sort().join(",") !== "darwin-arm64,darwin-x64" || !Object.values(archives).every((value) => digest.test(value))) {
+    || !archives || !["darwin-arm64","darwin-x64","linux-x64","win32-x64"].every((key) => digest.test(archives[key] ?? "")) || Object.keys(archives).some((key) => !["darwin-arm64","darwin-x64","linux-x64","win32-x64"].includes(key))) {
     throw new Error("app/native/runtime.json is not a valid client runtime pin");
   }
   const declared = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8")).devDependencies?.electron;

@@ -34,7 +34,7 @@ function cloneFiles(pairs) {
 }
 
 function cloneEntries(entries) {
-  if (process.platform !== "darwin") throw new Error("macOS packaging requires clonefile support");
+  if (process.platform !== "darwin") return require("./copy-portable.cjs").applyEntries(entries);
   const planRoot = fs.mkdtempSync(path.join(os.tmpdir(), "octopus-package-copy-"));
   try {
     const planPath = path.join(planRoot, "entries.json");
