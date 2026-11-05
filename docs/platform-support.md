@@ -91,3 +91,24 @@ npm run build:cli -- --runtime
 `materialize` selects its platform from `process.platform`, so the `win32-x64`
 Codex asset pinned in `release.json` is used automatically. `tar.exe` must exist
 — Windows 10 1803+ ships it at `C:\Windows\System32\tar.exe`.
+
+## Home setup on a gateway: one gate still hardcodes an account
+
+`app/cli/setup.cjs:383` writes `provider: { interface_id, required_state:
+"account_readable" }` into every setup plan, and the plan schema requires that
+constant. Setup then runs the provider's `probeAccount` / `signIn` client hooks
+(`app/electron/clientProviderMetadata.cjs:103-104`), which
+`world_provider_custom` does not implement, so a Home on an
+environment-credentialed gateway stops at:
+
+    Provider 'world_provider_custom' does not support desktop account setup.
+
+This is not a Linux or Windows problem — it reproduces on the original macOS
+path. Finishing it needs a third `required_state` (credentials supplied by the
+environment, no account to read) plus a skip in the step runner, and that
+constant is currently a single-value enum in the schema, so the change is
+deliberate rather than a one-line edit.
+
+Everything up to that point works on Linux: the runtime boots, the pack loads,
+the plan compiles with the right provider and 14 packages, and package
+installation completes.
