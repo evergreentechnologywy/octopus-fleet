@@ -125,3 +125,40 @@ deliberate rather than a one-line edit.
 Everything up to that point works on Linux: the runtime boots, the pack loads,
 the plan compiles with the right provider and 14 packages, and package
 installation completes.
+
+## The real Linux blocker: no process-authority backend
+
+The setup gate above is fixed — a Home now compiles a plan with
+`required_state: "credentials_present"` and all four setup steps
+(packages, extensions, workspace, provider) complete against
+`api.thetokenbroker.ai`.
+
+What it exposed is the thing that actually stops Octopus on Linux. Once a Home
+exists, every interface goes into a coma with:
+
+    no Linux process-authority backend enforces independent read, write, and execute roots
+
+pointing at `crates/octopus-verifiers/src/process_authority.rs:153`, whose
+non-macOS arms are:
+
+    #[cfg(target_os = "linux")]
+    return Err("no Linux process-authority backend enforces independent read, write, and execute roots".into())
+
+`prepare_macos` is a seatbelt/sandbox-exec implementation. There is no
+counterpart. Note that `octopus-sandbox-substrate` DOES ship Linux landlock /
+bwrap / seccomp and a Windows restricted-token backend
+(`manager.rs:351-390`), so the machinery to build on exists — what is missing is
+the process_authority layer that composes independent read, write and execute
+roots on top of it.
+
+That is the next task, and it is the one that turns "runtime boots" into
+"runtime works". Until it lands, a Linux Home boots, installs every package and
+seals setup, then cannot lift a single interface.
+
+Two smaller items visible in the same log:
+
+- `process executable 'zsh' is absent from PATH` — the workspace environment
+  door hardcodes zsh. Install it, or make the shell configurable.
+- `octopus-desktop-native` cannot be canonicalized — expected: that is the
+  Swift/AppKit helper, skipped off macOS by design. The `desktop_session`
+  driver is unavailable on Linux for this reason.
