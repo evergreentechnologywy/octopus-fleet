@@ -1,5 +1,7 @@
+const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { stableJson } = require("./projection/jsonFiles.cjs");
 const { modelServiceTiers, validateModelServiceTier } = require("./providerModelTiers.cjs");
 
 // Desktop account/catalog operations do not invoke a model or require a Home run.
@@ -71,6 +73,14 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, accoun
     const descriptor = await readProvider(root, plan.provider.interface_id);
     const client = await loadClientMetadata(root, descriptor);
     if (typeof client?.[operation] !== "function") {
+      // A provider with no client metadata module has no account to read and no
+      // sign-in to run. When the plan says its credentials come from the
+      // environment, that is not a defect: the observation records that the
+      // variables it declares are present, by name and never by value. Any
+      // other plan claiming a readable account is still an error.
+      if (plan.provider?.required_state === "credentials_present") {
+        return credentialsObservation(plan.provider.interface_id, descriptor);
+      }
       throw new Error(`Provider '${descriptor.id}' does not support desktop account setup.`);
     }
     const result = await client[operation]({ descriptor, accountClient, reference });
@@ -92,7 +102,11 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, accoun
         const selectedRoot = owners[0].materialized === true || owners[0].partially_materialized === true
           ? registryRoot : sourceRegistryRoot;
         const [provider] = await catalog([pack.setup_provider], selectedRoot);
-        return { ...pack, setup_provider: provider };
+        // A provider that takes its credentials from the environment has no
+        // account to read and no sign-in to run, so the plan must not claim one
+        // is required. The descriptor says which kind this is, and the plan
+        // carries the answer so its hash stays evidence rather than a guess.
+        return { ...pack, setup_provider: { ...provider, required_state: providerRequiredState(await readProvider(selectedRoot, id)) } };
       }));
       if (registryRoot() !== activeRoot || sourceRegistryRoot() !== sourceRoot) {
         throw new Error("Setup provider catalogue scope changed during discovery.");
@@ -110,6 +124,41 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, accoun
       return { providerInterfaceId: id, models, observedAtUnixMs: Date.now() };
     },
   };
+}
+
+// Which kind of account, if any, a provider needs. A descriptor that declares
+// its transport credentials as environment variables and ships no client
+// metadata module is read from the environment, so setup has no account step to
+// run for it. Everything else keeps the historical "account_readable".
+function providerRequiredState(descriptor) {
+  const transport = descriptor.interface_driver_config?.transport;
+  const hasEnvCredentials = typeof transport?.base_url_env === "string" && typeof transport?.auth_env_key === "string";
+  const hasClientMetadata = descriptor.interface_driver_config?.private_config?.client_metadata !== undefined;
+  return hasEnvCredentials && !hasClientMetadata ? "credentials_present" : "account_readable";
+}
+
+// The provider step's observation for an environment-credentialed provider. It
+// is a real check, not a skip: every variable the descriptor names must be set,
+// and the evidence records only their names — a missing key is a hard failure,
+// and a present one is never written down.
+function credentialsObservation(interfaceId, descriptor) {
+  const transport = descriptor.interface_driver_config?.transport;
+  const declared = [transport?.base_url_env, transport?.auth_env_key,
+    descriptor.interface_driver_config?.private_config?.opencodex?.model_env]
+    .filter(name => typeof name === "string" && name.length > 0);
+  if (!declared.length) throw new Error(`Provider '${descriptor.id}' declares no environment credentials`);
+  const missing = [...new Set(declared)].filter(name => !process.env[name]);
+  if (missing.length) {
+    throw new Error(`Provider '${descriptor.id}' is missing its declared credentials: ${missing.join(", ")}`);
+  }
+  const evidence = {
+    interface_id: interfaceId,
+    credential_source: "environment",
+    declared_variables: [...new Set(declared)].sort(),
+    observed_at_unix_ms: Date.now(),
+  };
+  return [{ kind: "provider_observation", id: `${interfaceId}.credentials`,
+    digest: crypto.createHash("sha256").update(stableJson(evidence)).digest("hex"), evidence }];
 }
 
 function descriptorModelCatalog(descriptor) {
@@ -164,4 +213,11 @@ function validateProviderModelSelection(providers, request) {
   validateModelServiceTier(model, requestedTier);
 }
 
-module.exports = { createClientProviderMetadata, validateProviderModelSelection };
+// Reads the descriptor itself: the projection returned by
+// readProviderInterfaceDescriptors does not carry interface_driver_config, so a
+// caller holding one of those rows cannot answer this question.
+async function providerRequiredStateFor(registryRoot, id) {
+  return providerRequiredState(await readProvider(registryRoot, id));
+}
+
+module.exports = { createClientProviderMetadata, validateProviderModelSelection, providerRequiredState, providerRequiredStateFor };

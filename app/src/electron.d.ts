@@ -1918,7 +1918,7 @@ export type OctopusClientSetupPlan = {
   }>;
   provider: {
     interface_id: string;
-    required_state: "account_readable";
+    required_state: "account_readable" | "credentials_present";
   };
   workspace: {
     request_digest: string;

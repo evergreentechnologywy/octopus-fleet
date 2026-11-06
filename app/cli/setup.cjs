@@ -6,7 +6,7 @@ const { createClientSetupStore } = require("../electron/clientSetup.cjs");
 const { initializeWorkspace, readWorkspaceSetupState, workspaceInitializeRequestDigest } = require("../electron/workspaceSetup.cjs");
 const { applyLocalApplicationPack, readLocalPackageCatalog, withLocalPackageInstallation, withInstalledAgentPreset } = require("../electron/localPackages.cjs");
 const { createOperatorChatClientLoader } = require("../electron/operatorChatClientContract.cjs");
-const { createClientProviderMetadata, validateProviderModelSelection } = require("../electron/clientProviderMetadata.cjs");
+const { createClientProviderMetadata, providerRequiredStateFor, validateProviderModelSelection } = require("../electron/clientProviderMetadata.cjs");
 const { readProviderInterfaceDescriptors, mutateOctopusOsWorkspace, setupTriggerEntries, setupTriggerProof, armSetupTriggers } = require("../electron/projection.cjs");
 const { projectionReadRequest } = require("../electron/projectionReadContract.cjs");
 const { planClientAgentTemplate } = require("../electron/clientAgentCatalog.cjs");
@@ -332,7 +332,8 @@ async function collectChoices(environment, pack, options) {
   const serviceTier = options.serviceTier;
   validateProviderModelSelection([discovered], { providerInterfaceId: provider.id, providerModel: model, reasoningEffort, serviceTier });
   return { operationId: options.operationId ?? randomUUID(), workspaceName, workspaceGoal: options.workspaceGoal ?? workspaceName,
-    projects, model, reasoningEffort, serviceTier, recommended, agentPresets: options.agentPresets };
+    projects, model, reasoningEffort, serviceTier, recommended, agentPresets: options.agentPresets,
+    providerRequiredState: await providerRequiredStateFor(environment.packageRoots.sourceRegistryRoot, provider.id) };
 }
 
 function compileSetupPlan(pack, choices) {
@@ -380,7 +381,10 @@ function compileSetupPlan(pack, choices) {
   return {
     pack: { id: pack.id, manifest_digest: pack.manifest_digest, selected_recommended: [...choices.recommended].sort() },
     packages: selected.map((row) => ({ id: row.package_id, source_digest: row.source_digest, desired_state: "installed" })).sort(byId),
-    extensions: [], provider: { interface_id: recipe.provider_interface_id, required_state: "account_readable" },
+    extensions: [], provider: { interface_id: recipe.provider_interface_id,
+      // Derived from the provider descriptor by setupCatalog, so a plan for an
+      // environment-credentialed provider does not claim an account it cannot read.
+      required_state: choices.providerRequiredState ?? pack.setup_provider?.required_state ?? "account_readable" },
     workspace: { request_digest: workspaceInitializeRequestDigest(request), request,
       project_defaults: defaults.sort((a, b) => a.package_id.localeCompare(b.package_id)) },
   };
@@ -396,6 +400,7 @@ async function verifySetupPlan(environment, plan) {
     projects: request.projects.map((row) => ({ ...row, ...row.presentation })),
     model: request.home.providerModel, reasoningEffort: request.home.reasoningEffort, serviceTier: request.home.serviceTier,
     recommended: plan.pack.selected_recommended, agentPresets: (request.agentPresets ?? []).map((row) => row.presetId),
+    providerRequiredState: await providerRequiredStateFor(environment.packageRoots.sourceRegistryRoot, request.home.providerInterfaceId),
   });
   if (stableJson(plan) !== stableJson(expected)) throw new Error("Saved setup choices no longer match the Application Pack's recipe and source files.");
   return catalog;

@@ -396,7 +396,9 @@ async function refuseCredentialStoreOnlyPlan(root) {
   plan.provider.required_state = "configured";
   await assert.rejects(
     store.begin({ operationId, plan }),
-    /required_state must be equal to constant/,
+    // required_state was a single-value const; it is now an enum, because an
+    // environment-credentialed provider has no account for setup to read.
+    /required_state must be equal to one of the allowed values/,
   );
 }
 
