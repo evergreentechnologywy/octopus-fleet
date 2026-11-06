@@ -44,6 +44,12 @@ if [ ! -x /opt/toolchains/cargo/bin/cargo ]; then
   RUSTUP_HOME=/opt/toolchains/rustup CARGO_HOME=/opt/toolchains/cargo \
     sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal --default-toolchain stable
 fi
+# A rustup install without a default toolchain leaves `cargo` present but
+# unrunnable ("could not choose a version of cargo to run"). Seen on a node with
+# a partial install, so the default is asserted every run rather than assumed
+# from the binary's presence.
+RUSTUP_HOME=/opt/toolchains/rustup CARGO_HOME=/opt/toolchains/cargo \
+  /opt/toolchains/cargo/bin/rustup default stable >/dev/null
 
 log "checkout ${BRANCH}"
 mkdir -p "$ROOT"
