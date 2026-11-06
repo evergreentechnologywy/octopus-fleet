@@ -25,8 +25,12 @@ export DEBIAN_FRONTEND=noninteractive
 # workspace environment door execs zsh, and bubblewrap is the primitive the
 # Linux process-authority backend will be built on.
 apt-get update -qq
+# libasound2-dev is a hard build dependency of the audio-device-session tool
+# runtime (alsa-sys); without it the release build fails on a node that has
+# never built audio before. Found by running this on powerstation rather than
+# trusting the hub, where the library happened to be present already.
 apt-get install -y --no-install-recommends \
-  ca-certificates curl git build-essential pkg-config libssl-dev \
+  ca-certificates curl git build-essential pkg-config libssl-dev libasound2-dev \
   bubblewrap zsh tar xz-utils
 
 log "node ${NODE_VERSION}"
