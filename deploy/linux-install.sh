@@ -48,8 +48,13 @@ fi
 # unrunnable ("could not choose a version of cargo to run"). Seen on a node with
 # a partial install, so the default is asserted every run rather than assumed
 # from the binary's presence.
-RUSTUP_HOME=/opt/toolchains/rustup CARGO_HOME=/opt/toolchains/cargo \
-  /opt/toolchains/cargo/bin/rustup default stable >/dev/null
+# Exported, not just passed: `build:cli` shells out to `cargo`, and the rustup
+# proxy resolves its toolchain from RUSTUP_HOME in the environment. Setting the
+# default inside /opt/toolchains/rustup while the build read ~/.rustup is what
+# produced "could not choose a version of cargo to run" on powerstation.
+export RUSTUP_HOME=/opt/toolchains/rustup
+export CARGO_HOME=/opt/toolchains/cargo
+/opt/toolchains/cargo/bin/rustup default stable >/dev/null
 
 log "checkout ${BRANCH}"
 mkdir -p "$ROOT"
