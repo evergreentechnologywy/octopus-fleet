@@ -57,17 +57,30 @@ which has no Windows equivalent. The client refuses anything that is not a
 A correct port needs, in order:
 
 1. A `ControlStream` enum over `UnixStream` and
-   `tokio::net::windows::named_pipe::NamedPipeServer`, with `AsyncRead` +
-   `AsyncWrite` forwarding to the active variant, so `answer()` keeps one body.
-2. A Windows authorisation check to replace `peer_cred().uid()`. Named pipes
-   carry their own ACL and support impersonation; the check must be equivalent
-   in strength, not a no-op, because this socket can stop and restart the
-   runtime.
-3. `socket_path()` returning a `\\.\pipe\...` name on Windows, and the client
+   `tokio::net::windows::named_pipe::NamedPipeServer`, implementing
+   `AsyncRead` + `AsyncWrite` by forwarding to the active variant, so `answer()`
+   keeps one body and `serve()` keeps one accept loop.
+2. A Windows authorisation check to replace `peer_cred().uid()`.
+   **This is where the policy bites:** `unsafe_code = "forbid"` is set on this
+   crate (`crates/octopus-app/Cargo.toml:48`, not inherited from the workspace,
+   whose `[workspace.lints]` block is empty), so the natural answer — create the
+   pipe with an explicit DACL via `windows-sys` and let the OS do the
+   authorising — needs a deliberate decision to relax that lint, or the code
+   must live in a sibling crate that permits `unsafe`.
+   The safe alternative, and the one to prefer: a 256-bit token generated at
+   `bind`, written into `state/runtime-instance/` beside the socket path, and
+   required as the first line of the connection before the JSON frame. That
+   leaves the Unix protocol untouched, needs no `unsafe`, and keeps the
+   property that matters — a peer must prove itself before it can ask the
+   runtime to stop or restart. It does need a `getrandom` (or equivalent)
+   dependency added to `octopus-app`, which does not currently have one.
+3. `socket_path()` returning a `\\.\pipe\...` name on Windows (a hashed Home,
+   because a pipe name cannot contain the `:` of a drive path), and the client
    accepting that endpoint form.
 
 Do not stub step 2. A named-pipe control socket that skips authorisation is
-strictly worse than the Unix socket it replaces.
+strictly worse than the Unix socket it replaces, because that socket can stop
+and restart the runtime.
 
 The native addon also cannot be cross-compiled: `x86_64-w64-mingw32-gcc` has no
 `fstatat` / `AT_SYMLINK_NOFOLLOW`, and Node ships no import library for mingw
